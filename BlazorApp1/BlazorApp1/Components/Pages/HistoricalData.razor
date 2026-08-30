@@ -1,0 +1,177 @@
+@page "/"
+@page "/dane-historyczne"
+@rendermode InteractiveServer
+@attribute [StreamRendering]
+@using System.Globalization
+@using BlazorApp1.Features.Models
+@using BlazorApp1.Features.Services
+@inject AnalysisApplicationService AnalysisService
+@inject AnalysisStores SettingsStore
+
+<PageTitle>Dane historyczne</PageTitle>
+
+<h1>Dane historyczne</h1>
+
+@if (!string.IsNullOrWhiteSpace(errorMessage))
+{
+    <div class="alert alert-danger" role="alert">@errorMessage</div>
+}
+else if (!string.IsNullOrWhiteSpace(infoMessage))
+{
+    <div class="alert alert-info" role="alert">@infoMessage</div>
+}
+else if (quotes.Count == 0)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <div class="row g-2 mb-2">
+        <div class="col-md-3">
+            <label class="form-label">Skok do daty</label>
+            <InputDate @bind-Value="jumpDate" class="form-control" />
+        </div>
+        <div class="col-md-2 d-flex align-items-end">
+            <button class="btn btn-primary w-100" @onclick="JumpToDate">Przeskocz</button>
+        </div>
+        <div class="col-md-7 d-flex align-items-end justify-content-end gap-2">
+            <button class="btn btn-outline-secondary" @onclick="GoToPreviousPage" disabled="@(currentStartIndex == 0)">Poprzednia</button>
+            <span class="align-self-center">Wiersze @VisibleStart-@VisibleEnd z @quotes.Count</span>
+            <button class="btn btn-outline-secondary" @onclick="GoToNextPage" disabled="@(currentStartIndex >= MaxStartIndex)">Następna</button>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-striped table-hover table-bordered align-middle">
+            <thead class="table-dark">
+                <tr>
+                    <th>Data</th>
+                    <th class="text-end">Otwarcie</th>
+                    <th class="text-end">Max</th>
+                    <th class="text-end">Min</th>
+                    <th class="text-end">Zamknięcie</th>
+                    <th class="text-end">Wolumen</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in VisibleRows)
+                {
+                    <tr>
+                        <td>@item.Date.ToString("yyyy-MM-dd")</td>
+                        <td class="text-end">@Format(item.Open)</td>
+                        <td class="text-end">@Format(item.High)</td>
+                        <td class="text-end">@Format(item.Low)</td>
+                        <td class="text-end">@Format(item.Close)</td>
+                        <td class="text-end">@Format(item.Volume)</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private readonly List<HistoricalQuoteRow> quotes = [];
+    private string? errorMessage;
+    private string? infoMessage;
+    private string selectedSource = "Csv";
+    private string csvPath = "data/quotes.csv";
+    private DateTime? jumpDate;
+    private int currentStartIndex;
+    private const int PageSize = 60;
+
+    private int MaxStartIndex => quotes.Count == 0 ? 0 : quotes.Count - 1;
+
+    private int VisibleStart => quotes.Count == 0 ? 0 : currentStartIndex + 1;
+
+    private int VisibleEnd => quotes.Count == 0
+        ? 0
+        : Math.Min(currentStartIndex + PageSize, quotes.Count);
+
+    private IEnumerable<HistoricalQuoteRow> VisibleRows => quotes
+        .Skip(currentStartIndex)
+        .Take(PageSize);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var settings = SettingsStore.GetCurrent();
+        selectedSource = settings.DataSourceType;
+        csvPath = settings.CsvRelativePath;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        quotes.Clear();
+        errorMessage = null;
+        infoMessage = null;
+        currentStartIndex = 0;
+
+        try
+        {
+            var settings = SettingsStore.GetCurrent();
+            settings.DataSourceType = selectedSource;
+            settings.CsvRelativePath = csvPath;
+            SettingsStore.Save(settings);
+
+            var result = await AnalysisService.AnalyzeAsync(settings);
+            quotes.AddRange(result.HistoricalQuotes.OrderByDescending(x => x.Date));
+        }
+        catch (Exception ex)
+        {
+            if (IsMissingDataMessage(ex.Message))
+            {
+                infoMessage = "Brak zaimportowanych danych. Aby rozpocząć, przejdź do Ustawień i zaimportuj plik CSV.";
+            }
+            else
+            {
+                errorMessage = $"Błąd ładowania danych historycznych: {ex.Message}";
+            }
+        }
+    }
+
+    private static bool IsMissingDataMessage(string message)
+        => message.Contains("Brak danych w bazie", StringComparison.OrdinalIgnoreCase)
+           || message.Contains("Nie znaleziono pliku CSV", StringComparison.OrdinalIgnoreCase)
+           || message.Contains("Wybierz zbiór danych", StringComparison.OrdinalIgnoreCase);
+
+    private void GoToPreviousPage()
+    {
+        if (currentStartIndex > 0)
+        {
+            currentStartIndex = Math.Max(0, currentStartIndex - PageSize);
+        }
+    }
+
+    private void GoToNextPage()
+    {
+        if (currentStartIndex < MaxStartIndex)
+        {
+            currentStartIndex = Math.Min(MaxStartIndex, currentStartIndex + PageSize);
+        }
+    }
+
+    private void JumpToDate()
+    {
+        if (!jumpDate.HasValue || quotes.Count == 0)
+        {
+            return;
+        }
+
+        int index = quotes.FindIndex(x => x.Date.Date == jumpDate.Value.Date);
+        if (index < 0)
+        {
+            index = quotes.FindIndex(x => x.Date.Date < jumpDate.Value.Date);
+        }
+
+        if (index < 0)
+        {
+            index = quotes.Count - 1;
+        }
+
+        currentStartIndex = Math.Clamp(index, 0, MaxStartIndex);
+    }
+
+    private static string Format(decimal value)
+        => value.ToString("0.00", CultureInfo.InvariantCulture);
+}

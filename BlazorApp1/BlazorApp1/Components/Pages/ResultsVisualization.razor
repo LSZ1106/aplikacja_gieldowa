@@ -1,0 +1,928 @@
+@page "/prezentacja-wynikow"
+@rendermode InteractiveServer
+@using System.Globalization
+@using System.Text
+@using BlazorApp1.Features.Models
+@using BlazorApp1.Features.Services
+@inject AnalysisApplicationService AnalysisService
+@inject AnalysisStores SettingsStore
+@inject SimulationResultsStore SimulationResultsStore
+@inject PresentationPreferencesStore PresentationPreferencesStore
+
+<PageTitle>Wykresy</PageTitle>
+
+<h1>Wykresy analizy</h1>
+
+<!-- PANEL STEROWANIA -->
+<div class="card mb-4 shadow-sm">
+    <div class="card-body py-2 d-flex flex-wrap align-items-center gap-3">
+        <button class="btn btn-primary btn-sm" @onclick="LoadAsync" disabled="@loading">
+            @if (loading) { <span class="spinner-border spinner-border-sm me-1"></span> }
+            Odśwież
+        </button>
+        <div class="btn-group btn-group-sm" role="group" aria-label="Powiększenie wykresu">
+            <button class="btn btn-primary" @onclick="ZoomOut" title="Pomniejsz">-</button>
+            <button class="btn btn-primary" @onclick="ResetZoom" title="Reset zoom">@chartZoomPercent%</button>
+            <button class="btn btn-primary" @onclick="ZoomIn" title="Powiększ">+</button>
+        </div>
+        <span class="vr"></span>
+        <span class="fw-bold small text-muted">Sygnały:</span>
+        <div class="form-check form-switch mb-0"><input class="form-check-input" type="checkbox" @bind="showSignals" @bind:after="OnViewOptionsChanged" /><label class="form-check-label small">Pokaż KUP/SPRZEDAJ</label></div>
+    </div>
+
+    @if (hasSimulation)
+    {
+        <div class="card-footer bg-white py-2">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label form-label-sm mb-1">Źródło sygnałów</label>
+                    <InputSelect @bind-Value="signalSource" @bind-Value:after="OnSignalSelectionChanged" class="form-select form-select-sm">
+                        <option value="BestStrategy">Najlepsza strategia</option>
+                        <option value="Individual">Symulacja pojedyncza</option>
+                        <option value="Group">Symulacja grupowa</option>
+                    </InputSelect>
+                </div>
+
+                @if (signalSource == "Individual")
+                {
+                    <div class="col-md-8">
+                        <label class="form-label form-label-sm mb-1">Wskaźnik</label>
+                        <InputSelect @bind-Value="selectedIndividualName" @bind-Value:after="OnSignalSelectionChanged" class="form-select form-select-sm">
+                            @foreach (var item in simulationResult!.IndividualRanking)
+                            {
+                                <option value="@item.IndicatorName">@item.IndicatorName</option>
+                            }
+                        </InputSelect>
+                    </div>
+                }
+                else if (signalSource == "Group")
+                {
+                    <div class="col-md-8">
+                        <label class="form-label form-label-sm mb-1">Grupa wskaźników</label>
+                        <InputSelect @bind-Value="selectedGroupLabel" @bind-Value:after="OnSignalSelectionChanged" class="form-select form-select-sm">
+                            @foreach (var item in simulationResult!.GroupRanking.Take(50))
+                            {
+                                <option value="@item.GroupLabel">@item.GroupLabel</option>
+                            }
+                        </InputSelect>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@if (!string.IsNullOrWhiteSpace(errorMessage))
+{
+    <div class="alert alert-danger">@errorMessage</div>
+}
+else if (loading)
+{
+    <p><em>Ładowanie danych...</em></p>
+}
+else if (chartReady)
+{
+    <!-- WYKRES CENY-->
+    <div class="card mb-3 shadow-sm">
+        <div class="card-header py-1 bg-white d-flex flex-wrap align-items-center gap-3">
+            <strong class="small">Wykres ceny</strong>
+            @LegendDot("#3b82f6", "Cena")
+            @if (ShouldShowOverlay(OverlayKey.Ma5))
+            {
+                @LegendDash("#1d4ed8", "MA(5)")
+            }
+            @if (ShouldShowOverlay(OverlayKey.Ma10))
+            {
+                @LegendDash("#f97316", "MA(10)")
+            }
+            @if (ShouldShowOverlay(OverlayKey.SmaShort))
+            {
+                @LegendDash("#a855f7", "SMA krótki")
+            }
+            @if (ShouldShowOverlay(OverlayKey.Sma20))
+            {
+                @LegendDash("#7c3aed", "SMA(20)")
+            }
+            @if (ShouldShowOverlay(OverlayKey.Rsi))
+            {
+                @LegendDash("#111827", "RSI")
+            }
+            @if (ShouldShowOverlay(OverlayKey.Macd))
+            {
+                @LegendDash("#0f172a", "MACD")
+            }
+            @if (ShouldShowOverlay(OverlayKey.MacdSignal))
+            {
+                @LegendDash("#f97316", "MACD Sig")
+            }
+            @if (ShouldShowOverlay(OverlayKey.StochK))
+            {
+                @LegendDash("#1d4ed8", "Stoch %K")
+            }
+            @if (ShouldShowOverlay(OverlayKey.StochD))
+            {
+                @LegendDash("#f97316", "Stoch %D")
+            }
+            @if (ShouldShowOverlay(OverlayKey.StochRsi))
+            {
+                @LegendDash("#16a34a", "StochRSI")
+            }
+            @if (ShouldShowOverlay(OverlayKey.StochRsiSignal))
+            {
+                @LegendDash("#dc2626", "StochRSI Sig")
+            }
+            @if (showSignals)
+            {
+                @LegendTriUp("#16a34a", "KUP")
+                @LegendTriDown("#dc2626", "SPRZEDAJ")
+            }
+        </div>
+        <div class="card-body p-1">
+            <div class="overflow-auto">
+            <svg viewBox="0 0 @W @PriceH" style="@PriceChartStyle">
+                <defs>
+                    <linearGradient id="pgrd" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.22" />
+                        <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.02" />
+                    </linearGradient>
+                </defs>
+                <rect x="@PL" y="@PT" width="@CW" height="@(PriceH-PT-PB)" fill="#fafbfc" rx="3" />
+                @RenderGridSvg(priceGrid)
+                @RenderDateTicksSvg(PriceH)
+                <polygon points="@priceArea" fill="url(#pgrd)" />
+                <polyline points="@priceLine" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linejoin="round" />
+                @if (ShouldShowOverlay(OverlayKey.Ma5))
+                {
+                    if (ma5Pts is not null) { <polyline points="@ma5Pts" fill="none" stroke="#1d4ed8" stroke-width="1.4" stroke-linejoin="round" /> }
+                }
+                @if (ShouldShowOverlay(OverlayKey.Ma10))
+                {
+                    if (ma10Pts is not null) { <polyline points="@ma10Pts" fill="none" stroke="#f97316" stroke-width="1.4" stroke-linejoin="round" /> }
+                }
+                @if (ShouldShowOverlay(OverlayKey.SmaShort))
+                {
+                    if (smaShortPts is not null) { <polyline points="@smaShortPts" fill="none" stroke="#a855f7" stroke-width="1.4" stroke-linejoin="round" /> }
+                }
+                @if (ShouldShowOverlay(OverlayKey.Sma20))
+                {
+                    if (sma20Pts is not null) { <polyline points="@sma20Pts" fill="none" stroke="#7c3aed" stroke-width="1.4" stroke-linejoin="round" /> }
+                }
+                @if (ShouldShowOverlay(OverlayKey.Rsi) && rsiOverlayPts is not null)
+                {
+                    <polyline points="@rsiOverlayPts" fill="none" stroke="#111827" stroke-width="1.2" stroke-dasharray="6,3" stroke-linejoin="round" />
+                }
+                @if (ShouldShowOverlay(OverlayKey.Macd))
+                {
+                    if (macdOverlayPts is not null) { <polyline points="@macdOverlayPts" fill="none" stroke="#0f172a" stroke-width="1.2" stroke-dasharray="6,3" stroke-linejoin="round" /> }
+                }
+                @if (ShouldShowOverlay(OverlayKey.MacdSignal))
+                {
+                    if (macdSignalOverlayPts is not null) { <polyline points="@macdSignalOverlayPts" fill="none" stroke="#f97316" stroke-width="1.2" stroke-dasharray="6,3" stroke-linejoin="round" /> }
+                }
+                @if (ShouldShowOverlay(OverlayKey.StochK))
+                {
+                    if (stochKOverlayPts is not null) { <polyline points="@stochKOverlayPts" fill="none" stroke="#1d4ed8" stroke-width="1.2" stroke-dasharray="6,3" stroke-linejoin="round" /> }
+                }
+                @if (ShouldShowOverlay(OverlayKey.StochD))
+                {
+                    if (stochDOverlayPts is not null) { <polyline points="@stochDOverlayPts" fill="none" stroke="#f97316" stroke-width="1.2" stroke-dasharray="6,3" stroke-linejoin="round" /> }
+                }
+                @if (ShouldShowOverlay(OverlayKey.StochRsi))
+                {
+                    if (stochRsiOverlayPts is not null) { <polyline points="@stochRsiOverlayPts" fill="none" stroke="#16a34a" stroke-width="1.2" stroke-dasharray="6,3" stroke-linejoin="round" /> }
+                }
+                @if (ShouldShowOverlay(OverlayKey.StochRsiSignal))
+                {
+                    if (stochRsiSignalOverlayPts is not null) { <polyline points="@stochRsiSignalOverlayPts" fill="none" stroke="#dc2626" stroke-width="1.2" stroke-dasharray="6,3" stroke-linejoin="round" /> }
+                }
+                @if (showSignals)
+                {
+                    @foreach (var m in _buyMarkers)
+                    {
+                        <g>
+                            <polygon points="@F(m.X),@F(m.Y-8) @F(m.X-5),@F(m.Y+2) @F(m.X+5),@F(m.Y+2)" fill="#16a34a" stroke="#fff" stroke-width="1">
+                                <title>KUP @m.Date.ToString("yyyy-MM-dd") cena: @FD(m.Price)</title>
+                            </polygon>
+                        </g>
+                    }
+                    @foreach (var m in _sellMarkers)
+                    {
+                        <g>
+                            <polygon points="@F(m.X),@F(m.Y+8) @F(m.X-5),@F(m.Y-2) @F(m.X+5),@F(m.Y-2)" fill="#dc2626" stroke="#fff" stroke-width="1">
+                                <title>SPRZEDAJ @m.Date.ToString("yyyy-MM-dd") cena: @FD(m.Price)</title>
+                            </polygon>
+                        </g>
+                    }
+                }
+                <rect x="@PL" y="@PT" width="@CW" height="@(PriceH-PT-PB)" fill="none" stroke="#d1d5db" stroke-width="0.5" rx="3" />
+            </svg>
+            </div>
+        </div>
+    </div>
+
+    <!--WYKRES KAPITAŁU-->
+    <div class="card mb-3 shadow-sm">
+        <div class="card-header py-1 bg-white d-flex align-items-center gap-3">
+            <strong class="small">Krzywa kapitału (@activeEquityLabel)</strong>
+            @LegendDot("#8b5cf6", "Kapitał")
+            <div class="btn-group btn-group-sm ms-auto" role="group" aria-label="Powiększenie wykresu kapitału">
+                <button class="btn btn-primary" @onclick="ZoomOutEquity" title="Pomniejsz">-</button>
+                <button class="btn btn-primary" @onclick="ResetZoomEquity" title="Reset zoom">@equityChartZoomPercent%</button>
+                <button class="btn btn-primary" @onclick="ZoomInEquity" title="Powiększ">+</button>
+            </div>
+        </div>
+        <div class="card-body p-1">
+            <div class="overflow-auto">
+            <svg viewBox="0 0 @W @EquityH" style="@EquityChartStyle">
+                <defs>
+                    <linearGradient id="egrd" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.22" />
+                        <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0.02" />
+                    </linearGradient>
+                </defs>
+                <rect x="@PL" y="@PT" width="@CW" height="@(EquityH-PT-PB)" fill="#fafbfc" rx="3" />
+                @RenderGridSvg(equityGrid)
+                <polygon points="@equityArea" fill="url(#egrd)" />
+                <polyline points="@equityPts" fill="none" stroke="#8b5cf6" stroke-width="2" stroke-linejoin="round" />
+                <rect x="@PL" y="@PT" width="@CW" height="@(EquityH-PT-PB)" fill="none" stroke="#d1d5db" stroke-width="0.5" rx="3" />
+            </svg>
+            </div>
+        </div>
+    </div>
+
+    <!-- PODSUMOWANIE -->
+    @if (result is not null)
+    {
+        var s = GetBestStrategySummary();
+        <div class="card shadow-sm">
+            <div class="card-header py-1 bg-white"><strong class="small">Podsumowanie najlepszej strategii</strong></div>
+            <div class="card-body py-2">
+                <div class="row text-center">
+                    <div class="col"><small class="text-muted d-block">Kapitał końcowy</small><strong>@FD(s.FinalCapital)</strong></div>
+                    <div class="col"><small class="text-muted d-block">Stopa zwrotu</small><strong class="@(s.ReturnPct >= 0 ? "text-success" : "text-danger")">@FD(s.ReturnPct)%</strong></div>
+                    <div class="col"><small class="text-muted d-block">Transakcje</small><strong>@s.Trades</strong></div>
+                    <div class="col"><small class="text-muted d-block">Skuteczność</small><strong>@FD(s.WinRate)%</strong></div>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    // ──── State ────
+    private AnalysisResult? result;
+    private FullSimulationResult? simulationResult;
+    private string? errorMessage;
+    private bool loading;
+    private bool chartReady;
+
+    private enum OverlayKey
+    {
+        Ma5,
+        Ma10,
+        SmaShort,
+        Sma20,
+        Rsi,
+        Macd,
+        MacdSignal,
+        StochK,
+        StochD,
+        StochRsi,
+        StochRsiSignal
+    }
+    private string rsiPeriodLabel = "14";
+    private string signalSource = "BestStrategy";
+    private string selectedIndividualName = string.Empty;
+    private string selectedGroupLabel = string.Empty;
+    private bool showSignals = true;
+    private string activeEquityLabel = "najlepsza strategia";
+    private int chartZoomPercent = 100;
+    private int equityChartZoomPercent = 100;
+    private string PriceChartStyle => $"display:block; width:{chartZoomPercent.ToString(CultureInfo.InvariantCulture)}%; min-width:800px;";
+    private string EquityChartStyle => $"display:block; width:{equityChartZoomPercent.ToString(CultureInfo.InvariantCulture)}%; min-width:800px;";
+
+    const int W = 1000, PL = 70, PR = 15, PT = 25, PB = 35;
+    const int CW = W - PL - PR;
+    const int PriceH = 340, EquityH = 240;
+
+    private string priceLine = "", priceArea = "";
+    private string? ma5Pts, ma10Pts, smaShortPts, sma20Pts;
+    private string? rsiOverlayPts;
+    private string? macdOverlayPts, macdSignalOverlayPts;
+    private string? stochKOverlayPts, stochDOverlayPts;
+    private string? stochRsiOverlayPts, stochRsiSignalOverlayPts;
+    private string equityPts = "", equityArea = "";
+
+    private List<Marker> _buyMarkers = [], _sellMarkers = [];
+    private List<GridLine> priceGrid = [], equityGrid = [];
+    private List<DateTick> _dateTicks = [];
+
+    private bool hasSimulation => simulationResult is not null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        RestoreViewOptions();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        loading = true;
+        errorMessage = null;
+        chartReady = false;
+        StateHasChanged();
+
+        try
+        {
+            var settings = SettingsStore.GetCurrent();
+            rsiPeriodLabel = settings.RsiPeriod.ToString();
+            result = await AnalysisService.AnalyzeAsync(settings);
+            simulationResult = SimulationResultsStore.GetCurrent(settings);
+
+            if ((result.BestStrategy.EquityCurve.Count <= 1 || result.BestStrategy.Signals.Count == 0) && simulationResult is null)
+            {
+                simulationResult = await AnalysisService.RunSimulationAsync(settings);
+                SimulationResultsStore.Save(simulationResult, settings);
+            }
+
+            EnsureSignalSelection();
+            BuildCharts();
+            chartReady = true;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Błąd: {ex.Message}";
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void BuildCharts()
+    {
+        if (result is null) return;
+
+        var d = result.DailyIndicators;
+        int n = d.Count;
+        if (n < 2) return;
+
+        var closes = d.Select(r => (double)r.Close).ToList();
+        var dates = d.Select(r => r.Date).ToList();
+        double pMin = closes.Min(), pMax = closes.Max();
+        foreach (var v in d.Select(r => r.Ma5).Concat(d.Select(r => r.Ma10)).Concat(d.Select(r => r.SmaShort)).Concat(d.Select(r => r.Sma20)))
+            if (v.HasValue) { pMin = Math.Min(pMin, v.Value); pMax = Math.Max(pMax, v.Value); }
+        double pRange = pMax - pMin;
+        pMin -= pRange * 0.04; pMax += pRange * 0.04;
+
+        priceLine = BuildLine(closes.Select(v => (double?)v).ToList(), pMin, pMax, PriceH, n);
+        priceArea = BuildArea(closes, pMin, pMax, PriceH, n);
+        ma5Pts = BuildLine(d.Select(r => r.Ma5).ToList(), pMin, pMax, PriceH, n);
+        ma10Pts = BuildLine(d.Select(r => r.Ma10).ToList(), pMin, pMax, PriceH, n);
+        smaShortPts = BuildLine(d.Select(r => r.SmaShort).ToList(), pMin, pMax, PriceH, n);
+        sma20Pts = BuildLine(d.Select(r => r.Sma20).ToList(), pMin, pMax, PriceH, n);
+        priceGrid = MakeGrid(pMin, pMax, PriceH, 6);
+        _dateTicks = MakeDateTicks(dates, n);
+
+        BuildSignalMarkers(dates, closes, pMin, pMax, n);
+
+        rsiOverlayPts = BuildOverlayLine(d.Select(r => r.Rsi14).ToList(), pMin, pMax, PriceH, n);
+        macdOverlayPts = BuildOverlayLine(d.Select(r => r.Macd).ToList(), pMin, pMax, PriceH, n);
+        macdSignalOverlayPts = BuildOverlayLine(d.Select(r => r.MacdSignal).ToList(), pMin, pMax, PriceH, n);
+        stochKOverlayPts = BuildOverlayLine(d.Select(r => r.StochK).ToList(), pMin, pMax, PriceH, n);
+        stochDOverlayPts = BuildOverlayLine(d.Select(r => r.StochD).ToList(), pMin, pMax, PriceH, n);
+        stochRsiOverlayPts = BuildOverlayLine(d.Select(r => r.StochRsi).ToList(), pMin, pMax, PriceH, n);
+        stochRsiSignalOverlayPts = BuildOverlayLine(d.Select(r => r.StochRsiSignal).ToList(), pMin, pMax, PriceH, n);
+
+        equityPts = string.Empty;
+        equityArea = string.Empty;
+        equityGrid = [];
+
+        var eq = GetActiveEquityCurve().Select(v => (double)v).ToList();
+        if (eq.Count > 1)
+        {
+            double eMin = eq.Min(), eMax = eq.Max();
+            double er = eMax - eMin; eMin -= er * 0.04; eMax += er * 0.04;
+            equityPts = BuildLine(eq.Select(v => (double?)v).ToList(), eMin, eMax, EquityH, eq.Count);
+            equityArea = BuildArea(eq, eMin, eMax, EquityH, eq.Count);
+            equityGrid = MakeGrid(eMin, eMax, EquityH, 5);
+        }
+    }
+
+    private void BuildSignalMarkers(List<DateTime> dates, List<double> closes, double pMin, double pMax, int n)
+    {
+        _buyMarkers = []; _sellMarkers = [];
+        var idx = dates.Select((dt, i) => (dt, i)).ToDictionary(x => x.dt, x => x.i);
+        foreach (var sig in GetActiveSignals())
+        {
+            if (!idx.TryGetValue(sig.Date, out int i)) continue;
+            double x = MX(i, n), y = MY(closes[i], pMin, pMax, PriceH);
+            var m = new Marker(x, y, sig.Date, sig.Price);
+            if (sig.Side.StartsWith("KUP")) _buyMarkers.Add(m); else _sellMarkers.Add(m);
+        }
+    }
+
+    private List<TradeSignal> GetActiveSignals()
+    {
+        if (result is null)
+        {
+            return [];
+        }
+
+        if (signalSource == "BestStrategy")
+        {
+            var bestSim = GetBestSimulationStrategy();
+            if (bestSim is not null)
+            {
+                return bestSim.Value.Signals;
+            }
+        }
+
+        if (signalSource == "Individual" && simulationResult is not null)
+        {
+            var chosen = simulationResult.IndividualRanking.FirstOrDefault(x => x.IndicatorName == selectedIndividualName);
+            if (chosen is not null)
+            {
+                return chosen.Signals;
+            }
+        }
+
+        if (signalSource == "Group" && simulationResult is not null)
+        {
+            var chosen = simulationResult.GroupRanking.FirstOrDefault(x => x.GroupLabel == selectedGroupLabel);
+            if (chosen is not null)
+            {
+                return chosen.Signals;
+            }
+        }
+
+        if (result.BestStrategy.Signals.Count > 0)
+        {
+            return result.BestStrategy.Signals;
+        }
+
+        if (simulationResult is not null)
+        {
+            if (simulationResult.GroupRanking.Count > 0)
+            {
+                return simulationResult.GroupRanking[0].Signals;
+            }
+
+            if (simulationResult.IndividualRanking.Count > 0)
+            {
+                return simulationResult.IndividualRanking[0].Signals;
+            }
+        }
+
+        return result.BestStrategy.Signals;
+    }
+
+    private List<decimal> GetActiveEquityCurve()
+    {
+        if (result is null)
+        {
+            activeEquityLabel = "najlepsza strategia";
+            return [];
+        }
+
+        if (signalSource == "BestStrategy")
+        {
+            var bestSim = GetBestSimulationStrategy();
+            if (bestSim is not null)
+            {
+                activeEquityLabel = bestSim.Value.Label;
+                return bestSim.Value.EquityCurve;
+            }
+        }
+
+        if (signalSource == "Individual" && simulationResult is not null)
+        {
+            var chosen = simulationResult.IndividualRanking.FirstOrDefault(x => x.IndicatorName == selectedIndividualName);
+            if (chosen is not null)
+            {
+                activeEquityLabel = $"{chosen.IndicatorName}";
+                return chosen.EquityCurve;
+            }
+        }
+
+        if (signalSource == "Group" && simulationResult is not null)
+        {
+            var chosen = simulationResult.GroupRanking.FirstOrDefault(x => x.GroupLabel == selectedGroupLabel);
+            if (chosen is not null)
+            {
+                activeEquityLabel = $"grupa: {chosen.GroupLabel}";
+                return chosen.EquityCurve;
+            }
+        }
+
+        if (result.BestStrategy.EquityCurve.Count > 1)
+        {
+            activeEquityLabel = "najlepsza strategia";
+            return result.BestStrategy.EquityCurve;
+        }
+
+        if (simulationResult is not null)
+        {
+            if (simulationResult.GroupRanking.Count > 0)
+            {
+                var bestGroup = simulationResult.GroupRanking[0];
+                activeEquityLabel = $"grupa: {bestGroup.GroupLabel}";
+                return bestGroup.EquityCurve;
+            }
+
+            if (simulationResult.IndividualRanking.Count > 0)
+            {
+                var bestIndicator = simulationResult.IndividualRanking[0];
+                activeEquityLabel = bestIndicator.IndicatorName;
+                return bestIndicator.EquityCurve;
+            }
+        }
+
+        activeEquityLabel = "najlepsza strategia";
+        return result.BestStrategy.EquityCurve;
+    }
+
+    private (string Label, decimal FinalCapital, decimal ReturnPct, int Trades, decimal WinRate, List<decimal> EquityCurve, List<TradeSignal> Signals)? GetBestSimulationStrategy()
+    {
+        if (simulationResult is null)
+        {
+            return null;
+        }
+
+        var bestIndividual = simulationResult.IndividualRanking.FirstOrDefault();
+        var bestGroup = simulationResult.GroupRanking.FirstOrDefault();
+
+        if (bestIndividual is null && bestGroup is null)
+        {
+            return null;
+        }
+
+        if (bestGroup is null || (bestIndividual is not null && bestIndividual.ReturnPct >= bestGroup.ReturnPct))
+        {
+            return (
+                bestIndividual!.IndicatorName,
+                bestIndividual.FinalCapital,
+                bestIndividual.ReturnPct,
+                bestIndividual.Trades,
+                bestIndividual.WinRate,
+                bestIndividual.EquityCurve,
+                bestIndividual.Signals);
+        }
+
+        return (
+            $"grupa: {bestGroup.GroupLabel}",
+            bestGroup.FinalCapital,
+            bestGroup.ReturnPct,
+            bestGroup.Trades,
+            bestGroup.WinRate,
+            bestGroup.EquityCurve,
+            bestGroup.Signals);
+    }
+
+    private StrategyResult GetBestStrategySummary()
+    {
+        var bestSim = GetBestSimulationStrategy();
+        if (bestSim is null || result is null)
+        {
+            return result!.BestStrategy;
+        }
+
+        return new StrategyResult(
+            result.BestStrategy.Config,
+            bestSim.Value.FinalCapital,
+            bestSim.Value.ReturnPct,
+            bestSim.Value.Trades,
+            bestSim.Value.WinRate,
+            bestSim.Value.EquityCurve,
+            bestSim.Value.Signals);
+    }
+
+    private Task OnSignalSelectionChanged()
+    {
+        EnsureSignalSelection();
+        SaveViewOptions();
+        BuildCharts();
+        return Task.CompletedTask;
+    }
+
+    private Task OnViewOptionsChanged()
+    {
+        SaveViewOptions();
+        return Task.CompletedTask;
+    }
+
+    private void ZoomIn()
+    {
+        chartZoomPercent = Math.Min(220, chartZoomPercent + 20);
+        SaveViewOptions();
+    }
+
+    private void ZoomOut()
+    {
+        chartZoomPercent = Math.Max(60, chartZoomPercent - 20);
+        SaveViewOptions();
+    }
+
+    private void ResetZoom()
+    {
+        chartZoomPercent = 100;
+        SaveViewOptions();
+    }
+
+    private void ZoomInEquity()
+    {
+        equityChartZoomPercent = Math.Min(220, equityChartZoomPercent + 20);
+        SaveViewOptions();
+    }
+
+    private void ZoomOutEquity()
+    {
+        equityChartZoomPercent = Math.Max(60, equityChartZoomPercent - 20);
+        SaveViewOptions();
+    }
+
+    private void ResetZoomEquity()
+    {
+        equityChartZoomPercent = 100;
+        SaveViewOptions();
+    }
+
+    private void RestoreViewOptions()
+    {
+        var preferences = PresentationPreferencesStore.GetCurrent();
+        showSignals = preferences.ShowSignals;
+        chartZoomPercent = Math.Clamp(preferences.ChartZoomPercent, 60, 220);
+        equityChartZoomPercent = Math.Clamp(preferences.EquityChartZoomPercent, 60, 220);
+        signalSource = preferences.SignalSource;
+        selectedIndividualName = preferences.SelectedIndividualName;
+        selectedGroupLabel = preferences.SelectedGroupLabel;
+    }
+
+    private void SaveViewOptions()
+    {
+        PresentationPreferencesStore.Save(new PresentationPreferences(
+            false,
+            false,
+            showSignals,
+            false,
+            false,
+            false,
+            false,
+            chartZoomPercent,
+            equityChartZoomPercent,
+            signalSource,
+            selectedIndividualName,
+            selectedGroupLabel));
+    }
+
+    private bool ShouldShowOverlay(OverlayKey key)
+    {
+        foreach (var indicatorName in GetActiveIndicatorNames())
+        {
+            if (MatchesOverlay(indicatorName, key))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private IEnumerable<string> GetActiveIndicatorNames()
+    {
+        if (simulationResult is null)
+        {
+            return [];
+        }
+
+        if (signalSource == "Individual")
+        {
+            if (!string.IsNullOrWhiteSpace(selectedIndividualName))
+            {
+                return [selectedIndividualName];
+            }
+
+            return [];
+        }
+
+        if (signalSource == "Group")
+        {
+            var selected = simulationResult.GroupRanking.FirstOrDefault(x => x.GroupLabel == selectedGroupLabel);
+            return selected?.IndicatorNames ?? [];
+        }
+
+        var best = GetBestSimulationStrategy();
+        if (best is null)
+        {
+            return [];
+        }
+
+        if (best.Value.Label.StartsWith("grupa:", StringComparison.OrdinalIgnoreCase))
+        {
+            return best.Value.Label
+                .Replace("grupa:", string.Empty, StringComparison.OrdinalIgnoreCase)
+                .Split(" + ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+
+        return [best.Value.Label];
+    }
+
+    private static bool MatchesOverlay(string indicatorName, OverlayKey key)
+    {
+        if (indicatorName.StartsWith("MA Cross(", StringComparison.OrdinalIgnoreCase))
+        {
+            return key is OverlayKey.Ma5 or OverlayKey.Ma10;
+        }
+
+        if (indicatorName.StartsWith("MA(", StringComparison.OrdinalIgnoreCase))
+        {
+            return key is OverlayKey.Ma5 or OverlayKey.Ma10;
+        }
+
+        if (indicatorName.StartsWith("SMA(", StringComparison.OrdinalIgnoreCase))
+        {
+            return key is OverlayKey.SmaShort or OverlayKey.Sma20;
+        }
+
+        if (indicatorName.StartsWith("RSI(", StringComparison.OrdinalIgnoreCase))
+        {
+            return key == OverlayKey.Rsi;
+        }
+
+        if (indicatorName.StartsWith("MACD(", StringComparison.OrdinalIgnoreCase))
+        {
+            return key is OverlayKey.Macd or OverlayKey.MacdSignal;
+        }
+
+        if (indicatorName.StartsWith("STOCH(", StringComparison.OrdinalIgnoreCase))
+        {
+            return key is OverlayKey.StochK or OverlayKey.StochD;
+        }
+
+        if (indicatorName.StartsWith("StochRSI(", StringComparison.OrdinalIgnoreCase))
+        {
+            return key is OverlayKey.StochRsi or OverlayKey.StochRsiSignal;
+        }
+
+        return false;
+    }
+
+    private void EnsureSignalSelection()
+    {
+        if (simulationResult is null)
+        {
+            signalSource = "BestStrategy";
+            SaveViewOptions();
+            return;
+        }
+
+        if (signalSource == "Individual")
+        {
+            if (simulationResult.IndividualRanking.Count == 0)
+            {
+                signalSource = "BestStrategy";
+                SaveViewOptions();
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(selectedIndividualName) || !simulationResult.IndividualRanking.Any(x => x.IndicatorName == selectedIndividualName))
+            {
+                selectedIndividualName = simulationResult.IndividualRanking[0].IndicatorName;
+            }
+        }
+
+        if (signalSource == "Group")
+        {
+            if (simulationResult.GroupRanking.Count == 0)
+            {
+                signalSource = "BestStrategy";
+                SaveViewOptions();
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(selectedGroupLabel) || !simulationResult.GroupRanking.Any(x => x.GroupLabel == selectedGroupLabel))
+            {
+                selectedGroupLabel = simulationResult.GroupRanking[0].GroupLabel;
+            }
+        }
+    }
+
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+    private static string FD(decimal v) => v.ToString("0.####", CultureInfo.InvariantCulture);
+    private double MX(int i, int n) => PL + (n <= 1 ? 0 : (double)i / (n - 1) * CW);
+    private double MY(double val, double min, double max, int h)
+    {
+        int ch = h - PT - PB;
+        if (max <= min) return PT + ch / 2.0;
+        return PT + ch - (val - min) / (max - min) * ch;
+    }
+
+
+    private string? BuildLine(IReadOnlyList<double?> vals, double min, double max, int h, int n)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < vals.Count; i++)
+        {
+            if (vals[i] is not double v) continue;
+            if (sb.Length > 0) sb.Append(' ');
+            sb.Append(F(MX(i, n))).Append(',').Append(F(MY(v, min, max, h)));
+        }
+        return sb.Length == 0 ? null : sb.ToString();
+    }
+
+    private string? BuildOverlayLine(IReadOnlyList<double?> vals, double targetMin, double targetMax, int h, int n)
+    {
+        var numeric = vals.Where(v => v.HasValue).Select(v => v!.Value).ToList();
+        if (numeric.Count < 2)
+        {
+            return null;
+        }
+
+        double srcMin = numeric.Min();
+        double srcMax = numeric.Max();
+        double srcRange = srcMax - srcMin;
+        if (srcRange <= 0)
+        {
+            srcRange = 1;
+        }
+
+        var mapped = vals.Select(v =>
+            v.HasValue
+                ? (double?)(targetMin + ((v.Value - srcMin) / srcRange) * (targetMax - targetMin))
+                : null)
+            .ToList();
+
+        return BuildLine(mapped, targetMin, targetMax, h, n);
+    }
+
+    private string BuildArea(IReadOnlyList<double> vals, double min, double max, int h, int n)
+    {
+        double bot = h - PB;
+        var sb = new StringBuilder();
+        sb.Append(F(MX(0, n))).Append(',').Append(F(bot));
+        for (int i = 0; i < vals.Count; i++)
+            sb.Append(' ').Append(F(MX(i, n))).Append(',').Append(F(MY(vals[i], min, max, h)));
+        sb.Append(' ').Append(F(MX(n - 1, n))).Append(',').Append(F(bot));
+        return sb.ToString();
+    }
+
+    private List<GridLine> MakeGrid(double min, double max, int h, int count)
+    {
+        var list = new List<GridLine>();
+        for (int i = 0; i <= count; i++)
+        {
+            double val = min + (max - min) * i / count;
+            list.Add(new GridLine(MY(val, min, max, h), val.ToString("0.##", CultureInfo.InvariantCulture)));
+        }
+        return list;
+    }
+
+    private List<DateTick> MakeDateTicks(IReadOnlyList<DateTime> dates, int n)
+    {
+        var ticks = new List<DateTick>();
+        int step = Math.Max(1, n / 10);
+        for (int i = 0; i < n; i += step)
+            ticks.Add(new DateTick(MX(i, n), dates[i].ToString("dd.MM.yy")));
+        if (ticks.Count == 0 || ticks[^1].X < MX(n - 1, n) - 40)
+            ticks.Add(new DateTick(MX(n - 1, n), dates[^1].ToString("dd.MM.yy")));
+        return ticks;
+    }
+
+    private MarkupString RenderGridSvg(List<GridLine> grid)
+    {
+        var sb = new StringBuilder();
+        foreach (var gl in grid)
+        {
+            sb.Append($"<line x1=\"{PL}\" y1=\"{F(gl.Y)}\" x2=\"{W - PR}\" y2=\"{F(gl.Y)}\" stroke=\"#e5e7eb\" stroke-width=\"0.5\"/>");
+            sb.Append($"<text x=\"{PL - 6}\" y=\"{F(gl.Y + 4)}\" text-anchor=\"end\" font-size=\"9\" fill=\"#9ca3af\" font-family=\"monospace\">{gl.Label}</text>");
+        }
+        return new MarkupString(sb.ToString());
+    }
+
+    private MarkupString RenderDateTicksSvg(int h)
+    {
+        var sb = new StringBuilder();
+        foreach (var dt in _dateTicks)
+        {
+            sb.Append($"<line x1=\"{F(dt.X)}\" y1=\"{PT}\" x2=\"{F(dt.X)}\" y2=\"{h - PB}\" stroke=\"#f3f4f6\" stroke-width=\"0.5\"/>");
+            sb.Append($"<text x=\"{F(dt.X)}\" y=\"{h - PB + 14}\" text-anchor=\"middle\" font-size=\"8\" fill=\"#9ca3af\" font-family=\"monospace\">{dt.Label}</text>");
+        }
+        return new MarkupString(sb.ToString());
+    }
+
+    private static MarkupString LegendDot(string color, string label) =>
+        new($"<span class=\"d-flex align-items-center gap-1 ms-1\"><span style=\"width:10px;height:10px;border-radius:50%;background:{color};display:inline-block;\"></span><small class=\"text-muted\">{label}</small></span>");
+
+    private static MarkupString LegendDash(string color, string label) =>
+        new($"<span class=\"d-flex align-items-center gap-1 ms-1\"><span style=\"width:16px;height:0;border-top:2px dashed {color};display:inline-block;\"></span><small class=\"text-muted\">{label}</small></span>");
+
+    private static MarkupString LegendTriUp(string color, string label) =>
+        new($"<span class=\"d-flex align-items-center gap-1 ms-1\"><span style=\"width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:8px solid {color};display:inline-block;\"></span><small class=\"text-muted\">{label}</small></span>");
+
+    private static MarkupString LegendTriDown(string color, string label) =>
+        new($"<span class=\"d-flex align-items-center gap-1 ms-1\"><span style=\"width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:8px solid {color};display:inline-block;\"></span><small class=\"text-muted\">{label}</small></span>");
+
+    private sealed record Marker(double X, double Y, DateTime Date, decimal Price);
+    private sealed record GridLine(double Y, string Label);
+    private sealed record DateTick(double X, string Label);
+}

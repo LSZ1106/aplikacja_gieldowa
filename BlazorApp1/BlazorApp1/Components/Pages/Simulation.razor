@@ -1,0 +1,346 @@
+@page "/symulacja"
+@rendermode InteractiveServer
+@attribute [StreamRendering]
+@using System.Globalization
+@using BlazorApp1.Features.Models
+@using BlazorApp1.Features.Services
+@inject AnalysisApplicationService AnalysisService
+@inject AnalysisStores SettingsStore
+@inject SimulationResultsStore SimulationResultsStore
+
+<PageTitle>Symulacja</PageTitle>
+
+<h1>Symulacja strategii</h1>
+
+@if (!string.IsNullOrWhiteSpace(validationMessage))
+{
+    <div class="alert alert-warning" role="alert">@validationMessage</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(errorMessage))
+{
+    <div class="alert alert-danger" role="alert">@errorMessage</div>
+}
+
+
+<!--SEKCJA 1: SYMULACJA INDYWIDUALNA -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="fw-bold">Symulacja indywidualna wskaźników</span>
+        <button class="btn btn-primary btn-sm" @onclick="RunIndividualAsync" disabled="@isRunningIndividual">
+            @if (isRunningIndividual)
+            {
+                <span class="spinner-border spinner-border-sm me-1"></span>
+            }
+            Uruchom
+        </button>
+    </div>
+    <div class="card-body">
+        <p class="text-muted mb-3">Każdy wskaźnik testowany osobno — KUP gdy sygnał kupna, SPRZEDAJ gdy sygnał sprzedaży.</p>
+
+        @if (isRunningIndividual)
+        {
+            <p><em>Trwa symulacja…</em></p>
+        }
+        else if (individualResults is not null)
+        {
+            <div class="alert alert-info py-2">
+                Symulacja na <strong>@simulatedDays</strong> z @totalAvailableDays dostępnych dni handlowych.
+            </div>
+
+            <table class="table table-striped table-hover table-bordered align-middle mb-0">
+                <thead class="table-dark">
+                    <tr>
+                        <th class="text-end">#</th>
+                        <th>Wskaźnik</th>
+                        <th class="text-end">Stopa zwrotu</th>
+                        <th class="text-end">Kapitał końcowy</th>
+                        <th class="text-end">Transakcje</th>
+                        <th class="text-end">Skuteczność</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ int rank = 1; }
+                    @foreach (var ind in individualResults)
+                    {
+                        <tr class="@(rank == 1 ? "table-success" : "")">
+                            <td class="text-end">@rank</td>
+                            <td><strong>@ind.IndicatorName</strong></td>
+                            <td class="text-end @(ind.ReturnPct >= 0 ? "text-success" : "text-danger")">@Format(ind.ReturnPct)%</td>
+                            <td class="text-end">@Format(ind.FinalCapital)</td>
+                            <td class="text-end">@ind.Trades</td>
+                            <td class="text-end">@Format(ind.WinRate)%</td>
+                        </tr>
+                        rank++;
+                    }
+                </tbody>
+            </table>
+        }
+    </div>
+</div>
+
+<!--  SEKCJA 2: SYMULACJA GRUPOWA -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="fw-bold">Symulacja grup wskaźników</span>
+        <button class="btn btn-primary btn-sm" @onclick="RunGroupsAsync" disabled="@isRunningGroups">
+            @if (isRunningGroups)
+            {
+                <span class="spinner-border spinner-border-sm me-1"></span>
+            }
+            Uruchom grupy
+        </button>
+    </div>
+    <div class="card-body">
+        <p class="text-muted mb-3">
+            Automatycznie generowane kombinacje wskaźników — sygnał KUP/SPRZEDAJ gdy co najmniej
+            <strong>@currentSettings.GroupSignalAgreementPercent%</strong> wskaźników w grupie daje dany sygnał.
+        </p>
+
+        @if (isRunningGroups)
+        {
+            <p><em>Trwa symulacja grup…</em></p>
+        }
+        else if (groupResults is not null)
+        {
+            <div class="mb-2">
+                <label class="form-label">Pokaż top:</label>
+                <select class="form-select form-select-sm d-inline-block w-auto" @bind="topGroupsCount">
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="0">Wszystkie (@groupResults.Count)</option>
+                </select>
+            </div>
+
+            <table class="table table-striped table-hover table-bordered align-middle">
+                <thead class="table-dark">
+                    <tr>
+                        <th class="text-end">#</th>
+                        <th>Grupa wskaźników</th>
+                        <th class="text-end">Stopa zwrotu</th>
+                        <th class="text-end">Kapitał końcowy</th>
+                        <th class="text-end">Transakcje</th>
+                        <th class="text-end">Skuteczność</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ int gRank = 1; }
+                    @foreach (var grp in DisplayGroups)
+                    {
+                        <tr class="@(gRank == 1 ? "table-success" : "")">
+                            <td class="text-end">@gRank</td>
+                            <td>@grp.GroupLabel</td>
+                            <td class="text-end @(grp.ReturnPct >= 0 ? "text-success" : "text-danger")">@Format(grp.ReturnPct)%</td>
+                            <td class="text-end">@Format(grp.FinalCapital)</td>
+                            <td class="text-end">@grp.Trades</td>
+                            <td class="text-end">@Format(grp.WinRate)%</td>
+                        </tr>
+                        gRank++;
+                    }
+                </tbody>
+            </table>
+
+            @if (groupResults.Count > 0)
+            {
+                var best = groupResults[0];
+              
+                <h5>Ostatnie sygnały najlepszej grupy</h5>
+                <table class="table table-striped table-hover table-bordered align-middle">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Data</th>
+                            <th>Sygnał</th>
+                            <th class="text-end">Cena</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var signal in best.Signals.TakeLast(20).Reverse())
+                        {
+                            <tr>
+                                <td>@signal.Date.ToString("yyyy-MM-dd")</td>
+                                <td class="@(signal.Side.StartsWith("KUP") ? "text-success fw-bold" : "text-danger fw-bold")">@signal.Side</td>
+                                <td class="text-end">@Format(signal.Price)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private List<SingleIndicatorSimResult>? individualResults;
+    private List<IndicatorGroupSimResult>? groupResults;
+    private string? errorMessage;
+    private string? validationMessage;
+    private bool isRunningIndividual;
+    private bool isRunningGroups;
+    private int maxDays;
+    private int totalAvailableDays;
+    private int simulatedDays;
+    private int topGroupsCount = 20;
+    private AnalysisSettings currentSettings = new();
+
+    private IEnumerable<IndicatorGroupSimResult> DisplayGroups =>
+        topGroupsCount > 0
+            ? groupResults!.Take(topGroupsCount)
+            : groupResults!;
+
+    protected override async Task OnInitializedAsync()
+    {
+        currentSettings = SettingsStore.GetCurrent();
+
+        var cached = SimulationResultsStore.GetCurrent(currentSettings);
+        if (cached is not null)
+        {
+            individualResults = cached.IndividualRanking.Count > 0 ? cached.IndividualRanking : null;
+            groupResults = cached.GroupRanking.Count > 0 ? cached.GroupRanking : null;
+            totalAvailableDays = cached.TotalAvailableDays;
+            simulatedDays = cached.SimulatedDays;
+        }
+        else if (SimulationResultsStore.GetCurrent() is not null)
+        {
+            validationMessage = "Ustawienia zostały zmienione. Uruchom symulację ponownie, aby zobaczyć wyniki dla aktualnych parametrów.";
+        }
+
+        try
+        {
+            maxDays = await AnalysisService.GetAvailableDaysAsync(currentSettings);
+        }
+        catch
+        {
+            maxDays = 0;
+        }
+    }
+
+    private bool Validate()
+    {
+        validationMessage = null;
+
+        currentSettings = SettingsStore.GetCurrent();
+
+        int simulationDays = currentSettings.SimulationDays ?? maxDays;
+
+        if (maxDays > 0 && simulationDays > maxDays)
+        {
+            validationMessage = $"Wybrano {simulationDays} dni, ale dostępnych jest tylko {maxDays}. Zmniejsz liczbę dni.";
+            return false;
+        }
+
+        if (currentSettings.InitialCapital <= 0)
+        {
+            validationMessage = "Kapitał początkowy musi być większy od 0.";
+            return false;
+        }
+
+        if (!currentSettings.UseSma && !currentSettings.UseRsi && !currentSettings.UseStoch && !currentSettings.UseMacd && !currentSettings.UseStochRsi)
+        {
+            validationMessage = "Wybierz co najmniej jeden wskaźnik w Ustawieniach.";
+            return false;
+        }
+
+        if (currentSettings.GroupSignalAgreementPercent is < 1 or > 100)
+        {
+            validationMessage = "Próg zgodności sygnału grupy musi być w zakresie 1-100%.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private AnalysisSettings BuildSettings()
+    {
+        currentSettings = SettingsStore.GetCurrent();
+        return currentSettings;
+    }
+
+    private string GetEnabledIndicatorsLabel()
+    {
+        var list = new List<string>();
+        if (currentSettings.UseSma) list.Add("MA/SMA");
+        if (currentSettings.UseRsi) list.Add("RSI");
+        if (currentSettings.UseStoch) list.Add("STOCH");
+        if (currentSettings.UseMacd) list.Add("MACD");
+        if (currentSettings.UseStochRsi) list.Add("StochRSI");
+        return list.Count == 0 ? "brak" : string.Join(", ", list);
+    }
+
+    private async Task RunIndividualAsync()
+    {
+        validationMessage = null;
+        errorMessage = null;
+        if (!Validate()) return;
+
+        isRunningIndividual = true;
+        StateHasChanged();
+
+        try
+        {
+            var settings = BuildSettings();
+            var result = await AnalysisService.RunIndividualSimulationAsync(settings);
+            var existing = SimulationResultsStore.GetCurrent(settings);
+            var merged = new FullSimulationResult(
+                result.IndividualRanking,
+                existing?.GroupRanking ?? [],
+                result.TotalAvailableDays,
+                result.SimulatedDays);
+
+            SimulationResultsStore.Save(merged, settings);
+            individualResults = result.IndividualRanking;
+            groupResults = existing?.GroupRanking.Count > 0 ? existing.GroupRanking : null;
+            totalAvailableDays = result.TotalAvailableDays;
+            simulatedDays = result.SimulatedDays;
+            maxDays = result.TotalAvailableDays;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Błąd symulacji: {ex.Message}";
+        }
+        finally
+        {
+            isRunningIndividual = false;
+        }
+    }
+
+    private async Task RunGroupsAsync()
+    {
+        validationMessage = null;
+        errorMessage = null;
+        if (!Validate()) return;
+
+        isRunningGroups = true;
+        StateHasChanged();
+
+        try
+        {
+            var settings = BuildSettings();
+            var result = await AnalysisService.RunGroupSimulationAsync(settings);
+            var existing = SimulationResultsStore.GetCurrent(settings);
+            var merged = new FullSimulationResult(
+                existing?.IndividualRanking ?? [],
+                result.GroupRanking,
+                result.TotalAvailableDays,
+                result.SimulatedDays);
+
+            SimulationResultsStore.Save(merged, settings);
+            individualResults = existing?.IndividualRanking.Count > 0 ? existing.IndividualRanking : null;
+            groupResults = result.GroupRanking;
+            totalAvailableDays = result.TotalAvailableDays;
+            simulatedDays = result.SimulatedDays;
+            maxDays = result.TotalAvailableDays;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Błąd symulacji: {ex.Message}";
+        }
+        finally
+        {
+            isRunningGroups = false;
+        }
+    }
+
+    private static string Format(decimal value)
+        => value.ToString("0.00", CultureInfo.InvariantCulture);
+}

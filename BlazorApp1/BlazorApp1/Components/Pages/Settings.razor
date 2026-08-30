@@ -1,0 +1,496 @@
+﻿@page "/ustawienia"
+@rendermode InteractiveServer
+@using BlazorApp1.Data
+@using BlazorApp1.Features.Models
+@using BlazorApp1.Features.Services
+@using Microsoft.AspNetCore.Components.Forms
+@inject AnalysisApplicationService AnalysisService
+@inject AnalysisStores SettingsStore
+@inject QuoteDataSetService DataSetService
+
+<PageTitle>Ustawienia</PageTitle>
+
+<h1>Ustawienia</h1>
+
+<EditForm Model="settings" OnValidSubmit="SaveSettingsAsync">
+    <div class="card mb-3">
+        <div class="card-header fw-bold">Źródło danych</div>
+        <div class="card-body">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-2">
+                    <label class="form-label">Źródło</label>
+                    <InputSelect @bind-Value="settings.DataSourceType" @bind-Value:after="OnSourceChangedAsync" class="form-select">
+                        <option value="Csv">CSV</option>
+                        <option value="Database">Baza danych</option>
+                    </InputSelect>
+                </div>
+
+                @if (settings.DataSourceType == "Csv")
+                {
+                    <div class="col-md-5">
+                        <label class="form-label">Wybierz plik CSV</label>
+                        <InputFile OnChange="OnFileSelected" class="form-control" accept=".csv" />
+                    </div>
+                    <div class="col-md-3 d-grid">
+                        <button type="button" class="btn btn-success" @onclick="ImportCsvAsync" disabled="@(selectedFile is null || importing)">
+                            @ImportButtonText
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="col-md-7">
+                        <label class="form-label">Zbiór danych</label>
+                        <select class="form-select" value="@selectedDataSetId" @onchange="OnDataSetSelectedAsync">
+                            <option value="">— wybierz —</option>
+                            @foreach (var ds in dataSets)
+                            {
+                                <option value="@ds.Id">@ds.Name (@ds.UploadedAt.ToString("yyyy-MM-dd HH:mm")) @(ds.UserId is null ? "[przykładowe]" : "[moje]")</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-md-1 d-grid">
+                        <label class="form-label">&nbsp;</label>
+                        <button type="button" class="btn btn-outline-danger" title="Usuń wybrany zbiór" @onclick="DeleteSelectedDataSetAsync" disabled="@(!CanDeleteSelectedDataSet || deletingDataSet)">X</button>
+                    </div>
+                }
+            </div>
+
+            @if (settings.DataSourceType == "Csv" && selectedFile is not null)
+            {
+                <div class="mt-2 small text-muted">Wybrany plik: @selectedFile.Name</div>
+            }
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header fw-bold">Ustawienia symulacji</div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-2">
+                    <label class="form-label">Kapitał początkowy</label>
+                    <InputNumber @bind-Value="settings.InitialCapital" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Okres symulacji</label>
+                    <InputNumber @bind-Value="settings.SimulationCalendarDays" @bind-Value:after="OnCalendarDaysChangedAsync" class="form-control" />
+                    @if (tradingDaysEquivalent is int td)
+                    {
+                        <small class="text-muted">@td dni handlowych</small>
+                    }
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Próg zgodności sygnału grupy</label>
+                    <InputNumber @bind-Value="settings.GroupSignalAgreementPercent" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Tryb transakcji</label>
+                    <InputSelect @bind-Value="settings.MaxUnitsPerBuySignal" class="form-select">
+                        <option value="0">cały dostępny kapitał</option>
+                        <option value="1">1 jednostka</option>
+                        <option value="2">2 jednostki</option>
+                        <option value="3">3 jednostki</option>
+                        <option value="4">4 jednostki</option>
+                        <option value="5">5 jednostek</option>
+                        <option value="10">10 jednostek</option>
+                    </InputSelect>
+                </div>
+            </div>
+
+            <div class="row g-3 mt-1">
+                <div class="col-md-2">
+                    <label class="form-label">RSI kupno</label>
+                    <InputNumber @bind-Value="settings.RsiBuyThreshold" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">RSI sprzedaż</label>
+                    <InputNumber @bind-Value="settings.RsiSellThreshold" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">STOCH kupno</label>
+                    <InputNumber @bind-Value="settings.StochBuyThreshold" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">STOCH sprzedaż</label>
+                    <InputNumber @bind-Value="settings.StochSellThreshold" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">StochRSI kupno</label>
+                    <InputNumber @bind-Value="settings.StochRsiBuyThreshold" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">StochRSI sprzedaż</label>
+                    <InputNumber @bind-Value="settings.StochRsiSellThreshold" class="form-control" />
+                </div>
+            </div>
+
+            <div class="mt-2">
+                @if (availableDays is int days)
+                {
+                    if (settings.SimulationDays is > 0 and var selectedDays && selectedDays > days)
+                    {
+                        <div class="text-warning small">Uwaga: ustawiono @selectedDays dni, ale dostępnych jest tylko @days.</div>
+                    }
+                    else
+                    {
+                        <small class="text-muted">Dostępne dni dla aktualnego źródła: @days</small>
+                    }
+                }
+                else if (!string.IsNullOrWhiteSpace(availableDaysError))
+                {
+                    <small class="text-warning">@availableDaysError</small>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header fw-bold">Wskaźniki używane w symulacji</div>
+        <div class="card-body">
+            <div class="form-check form-check-inline">
+                <InputCheckbox @bind-Value="settings.UseSma" class="form-check-input" />
+                <label class="form-check-label">SMA/MA</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <InputCheckbox @bind-Value="settings.UseRsi" class="form-check-input" />
+                <label class="form-check-label">RSI</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <InputCheckbox @bind-Value="settings.UseStoch" class="form-check-input" />
+                <label class="form-check-label">STOCH</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <InputCheckbox @bind-Value="settings.UseMacd" class="form-check-input" />
+                <label class="form-check-label">MACD</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <InputCheckbox @bind-Value="settings.UseStochRsi" class="form-check-input" />
+                <label class="form-check-label">StochRSI</label>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header fw-bold">Parametry wskaźników</div>
+        <div class="card-body">
+            <div class="row g-2">
+                <div class="col-md-2">
+                    <label class="form-label">MA krótki okres</label>
+                    <InputNumber @bind-Value="settings.Ma5Period" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">MA długi okres</label>
+                    <InputNumber @bind-Value="settings.Ma10Period" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">SMA krótki okres</label>
+                    <InputNumber @bind-Value="settings.SmaShortPeriod" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">SMA długi okres</label>
+                    <InputNumber @bind-Value="settings.Sma20Period" class="form-control" />
+                </div>
+            </div>
+
+            <div class="row g-2 mt-1">
+                <div class="col-md-2">
+                    <label class="form-label">RSI okres</label>
+                    <InputNumber @bind-Value="settings.RsiPeriod" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Stoch %K okres</label>
+                    <InputNumber @bind-Value="settings.StochKPeriod" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Stoch %K wygładzenie</label>
+                    <InputNumber @bind-Value="settings.StochKSmooth" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">Stoch %D wygładzenie</label>
+                    <InputNumber @bind-Value="settings.StochDSmooth" class="form-control" />
+                </div>
+            </div>
+            <div class="row g-2 mt-1">
+                <div class="col-md-2">
+                    <label class="form-label">MACD szybki</label>
+                    <InputNumber @bind-Value="settings.MacdFast" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">MACD wolny</label>
+                    <InputNumber @bind-Value="settings.MacdSlow" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">MACD sygnał</label>
+                    <InputNumber @bind-Value="settings.MacdSignalPeriod" class="form-control" />
+                </div>
+            </div>
+
+            <div class="row g-2 mt-1">
+                <div class="col-md-2">
+                    <label class="form-label">StochRSI RSI okres</label>
+                    <InputNumber @bind-Value="settings.StochRsiPeriod" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">StochRSI Stoch okres</label>
+                    <InputNumber @bind-Value="settings.StochRsiStochPeriod" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">StochRSI %K wygładzenie</label>
+                    <InputNumber @bind-Value="settings.StochRsiSmooth" class="form-control" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">StochRSI %D sygnał</label>
+                    <InputNumber @bind-Value="settings.StochRsiSignalPeriod" class="form-control" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <button class="btn btn-primary" type="submit">Zapisz ustawienia</button>
+    <a class="btn btn-outline-secondary ms-2" href="symulacja">Przejdź do symulacji</a>
+</EditForm>
+
+@if (!string.IsNullOrWhiteSpace(message))
+{
+    <div class="alert alert-success mt-3" role="alert">@message</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(errorMessage))
+{
+    <div class="alert alert-danger mt-3" role="alert">@errorMessage</div>
+}
+
+@code {
+    private AnalysisSettings settings = new();
+    private string? message;
+    private string? errorMessage;
+    private List<DataEntities> dataSets = [];
+    private string selectedDataSetId = "";
+    private IBrowserFile? selectedFile;
+    private bool importing;
+    private bool deletingDataSet;
+    private int? availableDays;
+    private string? availableDaysError;
+    private int? tradingDaysEquivalent;
+    private bool CanDeleteSelectedDataSet => int.TryParse(selectedDataSetId, out _);
+
+    private string ImportButtonText => importing ? "Importowanie..." : "Importuj do bazy";
+
+    protected override async Task OnInitializedAsync()
+    {
+        settings = SettingsStore.GetCurrent();
+        selectedDataSetId = settings.SelectedDataSetId?.ToString() ?? "";
+        await LoadDataSetsAsync();
+        await RefreshAvailableDaysAsync();
+        await RefreshTradingDaysEquivalentAsync();
+    }
+
+    private async Task DeleteSelectedDataSetAsync()
+    {
+        if (!int.TryParse(selectedDataSetId, out var id))
+        {
+            return;
+        }
+
+        deletingDataSet = true;
+        errorMessage = null;
+        message = null;
+
+        try
+        {
+            await DataSetService.DeleteDataSetAsync(id, null);
+            await LoadDataSetsAsync();
+
+            if (dataSets.Count > 0)
+            {
+                var nextId = dataSets[0].Id;
+                settings.SelectedDataSetId = nextId;
+                selectedDataSetId = nextId.ToString();
+            }
+            else
+            {
+                settings.SelectedDataSetId = null;
+                selectedDataSetId = string.Empty;
+            }
+
+            SettingsStore.Save(settings);
+            await RefreshAvailableDaysAsync();
+            message = "Usunięto wybrany zbiór danych.";
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Błąd usuwania: {ex.Message}";
+        }
+        finally
+        {
+            deletingDataSet = false;
+        }
+    }
+
+    private async Task LoadDataSetsAsync()
+    {
+        dataSets = await DataSetService.GetAvailableDataSetsAsync(null);
+
+        if (settings.SelectedDataSetId is null && dataSets.Count > 0)
+        {
+            var latestId = dataSets[0].Id;
+            settings.SelectedDataSetId = latestId;
+            selectedDataSetId = latestId.ToString();
+        }
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        errorMessage = null;
+
+        settings.GroupSignalAgreementPercent = Math.Clamp(settings.GroupSignalAgreementPercent, 1, 100);
+        settings.RsiBuyThreshold = Math.Clamp(settings.RsiBuyThreshold, 0, 100);
+        settings.RsiSellThreshold = Math.Clamp(settings.RsiSellThreshold, 0, 100);
+        settings.StochBuyThreshold = Math.Clamp(settings.StochBuyThreshold, 0, 100);
+        settings.StochSellThreshold = Math.Clamp(settings.StochSellThreshold, 0, 100);
+        settings.StochRsiBuyThreshold = Math.Clamp(settings.StochRsiBuyThreshold, 0, 100);
+        settings.StochRsiSellThreshold = Math.Clamp(settings.StochRsiSellThreshold, 0, 100);
+
+        if (settings.RsiBuyThreshold >= settings.RsiSellThreshold)
+        {
+            errorMessage = "Dla RSI próg kupna musi być mniejszy niż próg sprzedaży.";
+            return;
+        }
+
+        if (settings.StochBuyThreshold >= settings.StochSellThreshold)
+        {
+            errorMessage = "Dla STOCH próg kupna musi być mniejszy niż próg sprzedaży.";
+            return;
+        }
+
+        if (settings.StochRsiBuyThreshold >= settings.StochRsiSellThreshold)
+        {
+            errorMessage = "Dla StochRSI próg kupna musi być mniejszy niż próg sprzedaży.";
+            return;
+        }
+
+        if (settings.DataSourceType == "Database" && settings.SelectedDataSetId is null)
+        {
+            errorMessage = "Wybierz zbiór danych z bazy.";
+            return;
+        }
+
+        SettingsStore.Save(settings);
+        message = "Zapisano ustawienia.";
+        await RefreshAvailableDaysAsync();
+    }
+
+    private async Task OnSourceChangedAsync()
+    {
+        errorMessage = null;
+        message = null;
+        await RefreshAvailableDaysAsync();
+    }
+
+    private async Task OnDataSetSelectedAsync(ChangeEventArgs e)
+    {
+        selectedDataSetId = e.Value?.ToString() ?? "";
+
+        if (int.TryParse(selectedDataSetId, out int id))
+        {
+            settings.SelectedDataSetId = id;
+            settings.DataSourceType = "Database";
+        }
+        else
+        {
+            settings.SelectedDataSetId = null;
+        }
+
+        await RefreshAvailableDaysAsync();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        selectedFile = e.File;
+    }
+
+    private async Task ImportCsvAsync()
+    {
+        if (selectedFile is null)
+        {
+            return;
+        }
+
+        importing = true;
+        errorMessage = null;
+        message = null;
+
+        try
+        {
+            using var stream = selectedFile.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            ms.Position = 0;
+
+            var datasetTitle = Path.GetFileNameWithoutExtension(selectedFile.Name);
+
+            var newId = await DataSetService.ImportCsvAsync(datasetTitle, ms, null);
+
+            await LoadDataSetsAsync();
+
+            settings.SelectedDataSetId = newId;
+            settings.DataSourceType = "Database";
+            selectedDataSetId = newId.ToString();
+            SettingsStore.Save(settings);
+
+            await RefreshAvailableDaysAsync();
+
+            message = $"Zaimportowano zbiór '{datasetTitle}' (ID: {newId}) i ustawiono źródło: Baza danych.";
+            selectedFile = null;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Błąd importu: {ex.Message}";
+        }
+        finally
+        {
+            importing = false;
+        }
+    }
+
+    private async Task RefreshAvailableDaysAsync()
+    {
+        availableDays = null;
+        availableDaysError = null;
+
+        try
+        {
+            availableDays = await AnalysisService.GetAvailableDaysAsync(settings);
+        }
+        catch (Exception ex)
+        {
+            availableDaysError = $"Nie udało się określić dostępnych dni: {ex.Message}";
+        }
+
+        await RefreshTradingDaysEquivalentAsync();
+    }
+
+    private async Task RefreshTradingDaysEquivalentAsync()
+    {
+        tradingDaysEquivalent = null;
+        if (settings.SimulationCalendarDays is > 0 and var cd)
+        {
+            try
+            {
+                var td = await AnalysisService.CalendarDaysToTradingDaysAsync(settings, cd);
+                tradingDaysEquivalent = td;
+                settings.SimulationDays = td;
+            }
+            catch { }
+        }
+        else
+        {
+            settings.SimulationDays = null;
+        }
+    }
+
+    private async Task OnCalendarDaysChangedAsync()
+    {
+        await RefreshTradingDaysEquivalentAsync();
+    }
+}
